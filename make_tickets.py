@@ -13,6 +13,8 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.auth.transport.requests import AuthorizedSession
+from icecream import install
+install()
 
 from consts import *
 
@@ -29,7 +31,11 @@ def args_parser():
     parser.add_argument('-d', '--document', help='The ID of the document into which tickets are to be generated', type=str, default=DOC_ID)
     parser.add_argument('-t', '--tickets',
                         help='The filename of the CSV containing the final delivery tickets, extracted from Google Delivery database',
-                        type=str, required=True)
+                        type=str)
+    parser.add_argument('-p', '--pickup',
+                        help='The filename of the CSV containing pickup tickets, extracted from Google Delivery database',
+                        type=str)
+
     return parser
 
 def parse_csv(filename):
@@ -73,8 +79,8 @@ def build_google_api(service, version):
     svc = build(service, version, credentials=creds, discoveryServiceUrl=DISCOVERY_DOC)
     return svc
 
-def insert_ticket(ticket_data, target_doc, service):
-    log = logging.getLogger('make_tickets')
+def insert_ticket(ticket_data):
+    log = logging.getLogger('insert_ticket')
 
     log.debug(pformat(ticket_data))
 
@@ -144,21 +150,61 @@ def insert_ticket(ticket_data, target_doc, service):
     ]
 
     return requests
-    # log.debug(pformat(requests))
-    # log.info('Sending request')
-    # result = service.documents().batchUpdate(documentId=target_doc, body={'requests': requests}).execute()
-    # log.debug(pformat(result))
+
+def insert_pickup_ticket(ticket_data):
+    log = logging.getLogger('insert_pickup_ticket')
+
+    log.debug(ic.format(ticket_data))
+
+    txtStyBR = TEXT_STYLE_BOTTOMRIGHT
+    txtStyBL = TEXT_STYLE_BOTTOMLEFT
+    txtStyMR = TEXT_STYLE_MIDRIGHT
+    txtStyML = TEXT_STYLE_MIDLEFT
+    txtStyTR = TEXT_STYLE_TOPRIGHT
+    txtStyTL = TEXT_STYLE_TOPLEFT
+
+    pSty = PARAGRAPH_STYLE_MID_LEFT
+
+    contact = ticket_data[NAME] + ' ' + ticket_data[PHONE]    
+    txtStyML['range']['endIndex'] = txtStyML['range']['startIndex'] + len(contact)
+    pSty['range']['endIndex'] = pSty['range']['startIndex'] + len(contact)
+
+    order = ticket_data[TOTAL_BAGS] + ' ' + ticket_data[MULCH_TYPE]
+    txtStyTL['range']['endIndex'] = txtStyTL['range']['startIndex'] + len(order)
+
+    ticket = ticket_data[ORDER_NUMBER]
+    txtStyTR = TEXT_STYLE_TOPRIGHT
+    txtStyTR['range']['endIndex'] = txtStyTR['range']['startIndex'] + len(ticket)
+
+    requests = [
+    { 'insertTable': { 'rows': 3, 'columns': 2, 'location': { 'index': 1 } } },
+    { 'updateTableCellStyle': CELL_STYLE_TOPLEFT },
+    { 'updateTableCellStyle': CELL_STYLE_TOPRIGHT },
+    { 'updateTableCellStyle': CELL_STYLE_MIDLEFT },
+    { 'updateTableCellStyle': CELL_STYLE_MIDRIGHT },        
+    { 'updateTableCellStyle': CELL_STYLE_BOTTOMLEFT },
+    { 'updateTableCellStyle': CELL_STYLE_BOTTOMRIGHT },    
+    { 'insertText': { 'text': contact, 'location': { 'index': 10 } } },
+    { 'updateParagraphStyle': pSty },
+    { 'updateTextStyle': txtStyML },
+    { 'insertText': { 'text': ticket, 'location': { 'index': 7 } } },
+    { 'updateTextStyle': txtStyTR },
+    { 'insertText': { 'text': order, 'location': { 'index': 5 } } },
+    { 'updateTextStyle': txtStyTL },
+    { 'updateTableRowStyle': ROW_STYLE_TALL },
+    { 'updateTableRowStyle': ROW_STYLE_SHORT },
+    { 'updateTableColumnProperties': COLUMN_PROPERTIES_WIDE },
+    { 'updateTableColumnProperties': COLUMN_PROPERTIES_THIN }
+    ]
+
+    return requests
 
 def row_cmp(item1, item2):
     log = logging.getLogger('row_cmp')
-    log.debug(pformat(item1))
-    log.debug(pformat(item2))
-    zip1 = item1[ZIP]
-    zip2 = item2[ZIP]
+    log.debug(ic.format(item1))
+    log.debug(ic.format(item2))
     bag1 = item1[TOTAL_BAGS]
     bag2 = item2[TOTAL_BAGS]
-    zone1 = item1[DELIVERY_ZONE]
-    zone2 = item2[DELIVERY_ZONE]
 
     if (bag1 == ''):
         bag1 = '0'
@@ -169,15 +215,21 @@ def row_cmp(item1, item2):
     elif (int(bag1) < 52 and int(bag2) > 51):
         return 1
 
-    if (zip1 == '78732' and zip2 != '78732'):
-        return -1
-    elif (zip2 == '78732' and zip1 != '78732'):
-        return 1
+    if ZIP in item1 and ZIP in item2:
+        zip1 = item1[ZIP]
+        zip2 = item2[ZIP]
 
-    if (zone1 == sorted([zone1,zone2])[0]):
-        return -1
+        if (zip1 == '78732' and zip2 != '78732'):
+            return -1
+        elif (zip2 == '78732' and zip1 != '78732'):
+            return 1
+
+        if (zone1 == sorted([zone1,zone2])[0]):
+            return -1
+        else:
+            return 1
     else:
-        return 1
+        return -1 if int(bag1) > int(bag2) else 1
 
 def sort_rows(rows):
     log = logging.getLogger('sort_rows')
@@ -186,8 +238,9 @@ def sort_rows(rows):
     log.debug(pformat(new_rows))
     return new_rows
 
-def make_tickets(rows, target_doc):
+def make_tickets(rows, target_doc, delivery_tix):
     log = logging.getLogger('make_tickets')
+    log.info("creating {} tickets".format("delivery" if delivery_tix else "pickup"))
     log.debug('getting service')
     docs = build_google_api('docs', 'v1')
 
@@ -199,7 +252,8 @@ def make_tickets(rows, target_doc):
 
     for r in rows:
         log.info('Creating for ' + r[ORDER_NUMBER])
-        requests.append(insert_ticket(r, target_doc, docs))        
+        req = insert_ticket(r) if delivery_tix else insert_pickup_ticket(r)
+        requests.append(req)        
         idx = idx + 1
 
         if idx % 4 == 0:
@@ -227,18 +281,24 @@ def main():
     ch = logging.StreamHandler()
     # add formatter to ch
     ch.setFormatter(formatter)
-    
+
     logging.getLogger('main').setLevel(logging.DEBUG)
     # logging.getLogger('make_tickets').setLevel(logging.DEBUG)
     logging.getLogger('googleapiclient').setLevel(logging.ERROR)
     log = logging.getLogger('main')
     parser = args_parser()
     args = parser.parse_args()
-    rows = parse_csv(args.tickets)
-    rows = sort_rows(rows)
-    # for row in rows:
-    #     log.debug("{},{},{}".format(row[ZIP], row[TOTAL_BAGS], row[DELIVERY_ZONE]))
-    make_tickets(rows, args.document)
+    if args.tickets and args.pickup:
+        log.error("Both --tickets and --pickup were specified. This is not allowed")        
+    elif not args.tickets and not args.pickup:
+        log.error("Neither --tickets and --pickup were specified. This is not allowed")
+    else:
+        csv = args.tickets if args.tickets else args.pickup
+        rows = parse_csv(csv)
+        rows = sort_rows(rows)
+        # for row in rows:
+        #     log.debug("{},{},{}".format(row[ZIP], row[TOTAL_BAGS], row[DELIVERY_ZONE]))
+        make_tickets(rows, args.document, args.tickets)
 
 #test code
 
@@ -308,5 +368,5 @@ def static_test():
     log.info(pformat(result))
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':    
     main()
