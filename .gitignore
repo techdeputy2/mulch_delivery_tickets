@@ -5,3 +5,5 @@ token.pickle
 *.csv
 .vscode
 old/*
+*.txt
+*.bak

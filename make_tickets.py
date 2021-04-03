@@ -20,14 +20,8 @@ from consts import *
 SCOPES = ['https://www.googleapis.com/auth/documents']
 DISCOVERY_DOC = ('https://docs.googleapis.com/$discovery/rest?'
                  'version=v1')
-# 2019 full tickets
-# DOC_ID = '1OW0mKpL9tbTBbB3hcjo4GhAF5NKfagSCqF-2pKCTXVQ'
-
-# test tickets
-#DOC_ID = '1w-nGqeiom5k8SC3LJLFSjrUZPouha5gqhuSYBvfqW0g'
-
 # test generated tickets
-DOC_ID = '1otlM_JIfaywU5l5TwwgYb6snMp5dei1vxeNdeTIt15M'
+DOC_ID = '1NhHteZQp0pxbc1Pf4yX5TBbKxIVH_UnSDrfufi2Of_A'
 
 
 def args_parser():
@@ -43,7 +37,10 @@ def parse_csv(filename):
     with open(filename, mode='r') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            rows.append(row)            
+            if row[MULCH_TYPE] == "Black Mulch":
+                row[MULCH_TYPE] = "BlkMulch"
+            if row[ORDER_NUMBER] != "#N/A":
+                rows.append(row)            
     return rows
 
 def load_credentials():
@@ -91,7 +88,7 @@ def insert_ticket(ticket_data, target_doc, service):
     pSty = PARAGRAPH_STYLE_MID_LEFT
 
     stpText = ''
-    if ticket_data[STEEP_DRIVEWAY] == 'Checked':
+    if ticket_data[STEEP_DRIVEWAY] == 'S':
         stpText = 'Steep'
     else:
         stpText = ' '
@@ -106,12 +103,12 @@ def insert_ticket(ticket_data, target_doc, service):
     if delivZone == '':
         delivZone = 'UNKNOWN'
     txtStyMR['range']['endIndex'] = txtStyMR['range']['startIndex'] + len(delivZone)
-    contact = ticket_data[FIRST_NAME] + ' ' + ticket_data[LAST_NAME] + ' ' + ticket_data[PHONE]    
+    contact = ticket_data[NAME] + ' ' + ticket_data[PHONE]    
     txtStyML['range']['endIndex'] = txtStyML['range']['startIndex'] + len(contact)
     pSty['range']['endIndex'] = pSty['range']['startIndex'] + len(contact)
     order = ticket_data[TOTAL_BAGS] + ' ' + ticket_data[MULCH_TYPE] + '\n#' + ticket_data[ORDER_NUMBER]
-    if 'Hardwood' == ticket_data[MULCH_TYPE] or int(ticket_data[TOTAL_BAGS]) > 99:
-        txtStyTR = TEXT_STYLE_TOPRIGHT_SMALL
+    #if 'Hardwood' == ticket_data[MULCH_TYPE] or int(ticket_data[TOTAL_BAGS]) > 99:
+    txtStyTR = TEXT_STYLE_TOPRIGHT_SMALL #always use small font
     txtStyTR['range']['endIndex'] = txtStyTR['range']['startIndex'] + len(order)
     addr = ticket_data[ADDRESS]
     if ticket_data[GATE_CODE] != '':
@@ -206,12 +203,17 @@ def make_tickets(rows, target_doc):
         idx = idx + 1
 
         if idx % 4 == 0:
+            log.info("Insert page break")
             requests.append(pageBreakReq)
 
         log.info('Sending requests')
         log.debug(pformat(requests))
         result = docs.documents().batchUpdate(documentId=target_doc, body={'requests': requests}).execute()
         log.debug(pformat(result))
+        non_empty = [reply for reply in result['replies'] if reply ]
+        if len(non_empty) > 0:
+            log.info('Non-empty replies')
+            log.info(pformat(non_empty))
         requests = []
         log.info("{} / {}".format(counter, len(rows)))
         counter = counter + 1
@@ -221,7 +223,13 @@ def make_tickets(rows, target_doc):
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s")
+    ch = logging.StreamHandler()
+    # add formatter to ch
+    ch.setFormatter(formatter)
+    
     logging.getLogger('main').setLevel(logging.DEBUG)
+    # logging.getLogger('make_tickets').setLevel(logging.DEBUG)
     logging.getLogger('googleapiclient').setLevel(logging.ERROR)
     log = logging.getLogger('main')
     parser = args_parser()
